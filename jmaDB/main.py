@@ -1,8 +1,6 @@
 import flet as ft
 import requests
-
-
-
+import sqlite3
 
 
 # 天気コードとアイコンのマッピング
@@ -96,7 +94,7 @@ def main(page: ft.Page):
 
     # サイドバーの作成
     def create_sidebar():
-        sidebar = ft.Column(spacing=10)
+        sidebar = ft.Column(spacing=10, scroll = ft.ScrollMode.AUTO)
         for region_code, region_info in region_data["centers"].items():
             region_tile = ft.ExpansionTile(
                 title=ft.Text(region_info["name"], color="white"),
