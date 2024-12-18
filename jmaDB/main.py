@@ -57,6 +57,77 @@ def create_weather_card(date, weather_code, max_temp, min_temp):
         elevation=2,
     )
 
+def init_db():
+    conn = sqlite3.connect("weather.db")
+    c = conn.cursor()
+    # 地域テーブル
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS regions (
+        region_code TEXT PRIMARY KEY,
+        region_name TEXT
+    )
+    ''')
+    # 天気テーブル
+    c.execute('''
+    CREATE TABLE IF NOT EXISTS forecasts (
+        region_code TEXT,
+        forecast_date TEXT,
+        weather_code TEXT,
+        min_temp REAL,
+        max_temp REAL,
+        PRIMARY KEY (region_code, forecast_date),
+        FOREIGN KEY (region_code) REFERENCES regions(region_code)
+    )
+    ''')
+    conn.commit()
+    conn.close()
+def store_region_data_in_db(region_data):
+    if not region_data:
+        return
+    conn = sqlite3.connect("weather.db")
+    c = conn.cursor()
+    for office_code, office_info in region_data["offices"].items():
+        region_code = office_code
+        region_name = office_info.get("name", "不明")
+        c.execute('''
+            INSERT OR IGNORE INTO regions (region_code, region_name)
+            VALUES (?, ?)
+        ''', (region_code, region_name))
+    conn.commit()
+    conn.close()
+def store_weather_data_in_db(region_code, weather_data):
+    if not weather_data or len(weather_data) < 2:
+        return
+    conn = sqlite3.connect("weather.db")
+    c = conn.cursor()
+    forecasts = weather_data[1]["timeSeries"][0]
+    dates = forecasts["timeDefines"]
+    areas = forecasts["areas"]
+    area = areas[0]
+    temp_data = weather_data[1]["timeSeries"][1]
+    temp_area = temp_data["areas"][0]
+    for i in range(len(dates)):
+        date = dates[i].split("T")[0]
+        weather_code = area["weatherCodes"][i]
+        min_temp = temp_area.get("tempsMin", [None])[i] if "tempsMin" in temp_area else None
+        max_temp = temp_area.get("tempsMax", [None])[i] if "tempsMax" in temp_area else None
+        c.execute('''
+            INSERT OR REPLACE INTO forecasts (region_code, forecast_date, weather_code, min_temp, max_temp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (region_code, date, weather_code, min_temp, max_temp))
+    conn.commit()
+    conn.close()
+def get_forecasts_from_db(region_code):
+    conn = sqlite3.connect("weather.db")
+    c = conn.cursor()
+    c.execute('SELECT region_name FROM regions WHERE region_code = ?', (region_code,))
+    row = c.fetchone()
+    region_name = row[0] if row else "不明"
+    c.execute('SELECT forecast_date, weather_code, min_temp, max_temp FROM forecasts WHERE region_code = ? ORDER BY forecast_date', (region_code,))
+    forecasts = c.fetchall()
+    conn.close()
+    return region_name, forecasts
+
 def main(page: ft.Page):
     page.title = "天気予報アプリ"
     page.padding = 10
