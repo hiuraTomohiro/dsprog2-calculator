@@ -2,7 +2,6 @@ import flet as ft
 import requests
 import sqlite3
 
-
 # 天気コードとアイコンのマッピング
 WEATHER_CODES = {
     "100": {"name": "晴れ", "icon": ft.icons.WB_SUNNY},
@@ -11,7 +10,7 @@ WEATHER_CODES = {
     "200": {"name": "くもり", "icon": ft.icons.CLOUD},
     "300": {"name": "雨", "icon": ft.icons.UMBRELLA},
     "400": {"name": "雪", "icon": ft.icons.AC_UNIT},
-} 
+}
 
 def get_weather_info(code):
     """天気コードから情報を取得"""
@@ -58,6 +57,7 @@ def create_weather_card(date, weather_code, max_temp, min_temp):
     )
 
 def init_db():
+    """DBの初期化"""
     conn = sqlite3.connect("weather.db")
     c = conn.cursor()
     # 地域テーブル
@@ -70,18 +70,20 @@ def init_db():
     # 天気テーブル
     c.execute('''
     CREATE TABLE IF NOT EXISTS forecasts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
         region_code TEXT,
         forecast_date TEXT,
         weather_code TEXT,
         min_temp REAL,
         max_temp REAL,
-        PRIMARY KEY (region_code, forecast_date),
         FOREIGN KEY (region_code) REFERENCES regions(region_code)
     )
     ''')
     conn.commit()
     conn.close()
+
 def store_region_data_in_db(region_data):
+    """地域データをDBに保存"""
     if not region_data:
         return
     conn = sqlite3.connect("weather.db")
@@ -95,7 +97,9 @@ def store_region_data_in_db(region_data):
         ''', (region_code, region_name))
     conn.commit()
     conn.close()
+
 def store_weather_data_in_db(region_code, weather_data):
+    """天気予報データをDBに保存"""
     if not weather_data or len(weather_data) < 2:
         return
     conn = sqlite3.connect("weather.db")
@@ -103,12 +107,11 @@ def store_weather_data_in_db(region_code, weather_data):
     forecasts = weather_data[1]["timeSeries"][0]
     dates = forecasts["timeDefines"]
     areas = forecasts["areas"]
-    area = areas[0]
     temp_data = weather_data[1]["timeSeries"][1]
     temp_area = temp_data["areas"][0]
     for i in range(len(dates)):
         date = dates[i].split("T")[0]
-        weather_code = area["weatherCodes"][i]
+        weather_code = areas[0]["weatherCodes"][i]
         min_temp = temp_area.get("tempsMin", [None])[i] if "tempsMin" in temp_area else None
         max_temp = temp_area.get("tempsMax", [None])[i] if "tempsMax" in temp_area else None
         c.execute('''
@@ -117,13 +120,20 @@ def store_weather_data_in_db(region_code, weather_data):
         ''', (region_code, date, weather_code, min_temp, max_temp))
     conn.commit()
     conn.close()
+
 def get_forecasts_from_db(region_code):
+    """DBから天気予報データを取得"""
     conn = sqlite3.connect("weather.db")
     c = conn.cursor()
     c.execute('SELECT region_name FROM regions WHERE region_code = ?', (region_code,))
     row = c.fetchone()
     region_name = row[0] if row else "不明"
-    c.execute('SELECT forecast_date, weather_code, min_temp, max_temp FROM forecasts WHERE region_code = ? ORDER BY forecast_date', (region_code,))
+    c.execute('''
+        SELECT forecast_date, weather_code, min_temp, max_temp 
+        FROM forecasts 
+        WHERE region_code = ? 
+        ORDER BY forecast_date
+    ''', (region_code,))
     forecasts = c.fetchall()
     conn.close()
     return region_name, forecasts
@@ -131,7 +141,7 @@ def get_forecasts_from_db(region_code):
 def main(page: ft.Page):
     page.title = "天気予報アプリ"
     page.padding = 10
-    page.theme_mode = ft.ThemeMode.LIGHT 
+    page.theme_mode = ft.ThemeMode.LIGHT
 
     # 地域データの取得
     region_data = fetch_data("http://www.jma.go.jp/bosai/common/const/area.json")
@@ -139,65 +149,42 @@ def main(page: ft.Page):
         page.add(ft.Text("地域データの取得に失敗しました"))
         return
 
-    # 天気データを表示
+    init_db()
+    store_region_data_in_db(region_data)
+
     def show_weather(region_code):
+        """選択した地域の天気を表示"""
         weather_data = fetch_data(f"https://www.jma.go.jp/bosai/forecast/data/forecast/{region_code}.json")
-        if not weather_data or len(weather_data) < 2:
-            weather_grid.controls = [ft.Text("天気データの取得に失敗しました")]
-            page.update()
-            return
+        if weather_data:
+            store_weather_data_in_db(region_code, weather_data)
 
-        forecasts = weather_data[1]["timeSeries"][0]
-        dates = forecasts["timeDefines"]
-        areas = forecasts["areas"]
-
-        temp_data = weather_data[1]["timeSeries"][1]
-        temp_area = temp_data["areas"][0]
-
-        cards = []
-        for i, date in enumerate(dates):
-            max_temp = temp_area.get("tempsMax", [None])[i]
-            min_temp = temp_area.get("tempsMin", [None])[i]
-            cards.append(create_weather_card(date.split("T")[0], areas[0]["weatherCodes"][i], max_temp, min_temp))
-
-        weather_grid.controls = cards
+        _, forecasts = get_forecasts_from_db(region_code)
+        weather_grid.controls = [
+            create_weather_card(date, code, max_temp, min_temp)
+            for date, code, min_temp, max_temp in forecasts
+        ]
         page.update()
 
-    # サイドバーの作成
-    def create_sidebar():
-        sidebar = ft.Column(spacing=10, scroll = ft.ScrollMode.AUTO)
-        for region_code, region_info in region_data["centers"].items():
-            region_tile = ft.ExpansionTile(
-                title=ft.Text(region_info["name"], color="white"),
-                controls=[
-                    ft.ListTile(
-                        title=ft.Text(
-                            region_data["offices"].get(sub_region, {}).get("name", "不明"),
-                            color="white",
-                        ),
-                        on_click=lambda e, code=sub_region: show_weather(code),
-                    )
-                    for sub_region in region_info["children"]
-                ],
+    sidebar = ft.Column(
+        spacing=10,
+        scroll=ft.ScrollMode.AUTO,
+        controls=[
+            ft.ListTile(
+                title=ft.Text(info["name"], color="white"),
+                on_click=lambda e, code=code: show_weather(code),
             )
-            sidebar.controls.append(region_tile)
-        return sidebar
+            for code, info in region_data["offices"].items()
+        ],
+    )
 
     weather_grid = ft.GridView(expand=True, runs_count=3, spacing=10, run_spacing=10)
-
-    # レイアウト構築
-    sidebar_container = ft.Container(
-        content=create_sidebar(),
-        width=250,
-        bgcolor="#455A64",
-        padding=10,
-        border_radius=10,
-    )
 
     page.add(
         ft.Row(
             [
-                sidebar_container,
+                ft.Container(
+                    content=sidebar, width=250, bgcolor="#455A64", padding=10, border_radius=10
+                ),
                 ft.VerticalDivider(width=1),
                 weather_grid,
             ],
@@ -205,9 +192,4 @@ def main(page: ft.Page):
         )
     )
 
-ft.app(target=main)         
-
-
-
-
-
+ft.app(target=main)
